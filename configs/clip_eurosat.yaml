@@ -1,0 +1,35 @@
+# §3 — CLIP-style pretraining on EuroSAT.
+# Recommended starting hyperparameters; tune as needed.
+
+vit:
+  img_size: 64
+  patch_size: 8
+  d_model: 384
+  num_heads: 6
+  num_blocks: 6
+  dropout: 0.1
+
+text_encoder:
+  model_name: sentence-transformers/all-MiniLM-L6-v2
+
+projection:
+  d_proj: 256
+
+optim:
+  lr: 3.0e-4
+  weight_decay: 0.1
+  betas: [0.9, 0.95]
+  warmup_steps: 200
+  scheduler: cosine
+
+train:
+  batch_size: 256
+  num_epochs: 20
+  num_workers: 4
+  log_every: 50
+  eval_every_epoch: 1
+
+split:
+  train: "train[:80%]"
+  val: "train[80%:90%]"
+  test: "train[90%:]"

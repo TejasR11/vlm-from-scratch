@@ -1,0 +1,41 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+
+# Environments
+.venv/
+venv/
+env/
+
+# Notebooks
+.ipynb_checkpoints/
+
+# Local Codex state
+.codex
+.codex/
+
+# Data and experiment outputs
+/data/*
+!/data/README.md
+/CLEVR_v1.0/
+/CLEVR_v1.0.zip
+/runs/
+/outputs/
+/checkpoints/
+/wandb/
+
+# Model artifacts
+*.pt
+*.pth
+*.ckpt
+*.safetensors
+
+# OS/editor files
+.DS_Store
+Thumbs.db
