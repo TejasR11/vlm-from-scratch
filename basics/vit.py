@@ -4,7 +4,7 @@ You implement: PatchEmbeddings, ViT.
 """
 
 from __future__ import annotations
-
+from basics.model import Block
 import torch
 import torch.nn as nn
 
@@ -32,14 +32,10 @@ class PatchEmbeddings(nn.Module):
         self.img_size = img_size
         self.patch_size = patch_size
         self.num_patches = (img_size // patch_size) ** 2
-        # TODO: implement.
-        # Hint: use nn.Conv2d with kernel_size=patch_size, stride=patch_size,
-        # in_channels=3, out_channels=d_model. Then flatten the spatial dims
-        # and transpose so each patch is a token.
-        raise NotImplementedError
+        self.proj = nn.Conv2d(3, d_model, kernel_size=patch_size, stride=patch_size)
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
-        raise NotImplementedError
+        return self.proj(x).flatten(2).transpose(1, 2)
 
 
 class ViT(nn.Module):
@@ -75,7 +71,24 @@ class ViT(nn.Module):
         # Hint: store self.cls_token as nn.Parameter(torch.zeros(1, 1, d_model))
         # and self.pos_embed as nn.Parameter(torch.zeros(1, num_patches+1, d_model)).
         # Use basics.model.Block(..., is_decoder=False) for the encoder blocks.
-        raise NotImplementedError
+        self.patch_embedding = PatchEmbeddings(patch_size=patch_size, img_size=img_size, d_model=d_model)
+        num_tokens = self.patch_embedding.num_patches + 1
+        self.cls_token = nn.Parameter(torch.zeros(1, 1, d_model))
+        self.pos_embed = nn.Parameter(torch.zeros(1, num_tokens, d_model))
+        self.blocks = nn.Sequential(
+            *[
+                Block(
+                    d_model=d_model,
+                    num_heads=num_heads,
+                    block_size=num_tokens,
+                    is_decoder=False,
+                    dropout=dropout,
+                )
+                for _ in range(num_blocks)
+            ]
+        )
+        self.ln_f = nn.LayerNorm(d_model)
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         raise NotImplementedError
+        
