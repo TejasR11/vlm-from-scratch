@@ -90,5 +90,11 @@ class ViT(nn.Module):
         self.ln_f = nn.LayerNorm(d_model)
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
-        raise NotImplementedError
-        
+        B = x.shape[0]
+        x = self.patch_embedding(x)
+        cls_tokens = self.cls_token.expand(B, -1, -1)
+        x = torch.cat([cls_tokens, x], dim=1)
+        x = x + self.pos_embed
+        x = self.blocks(x)
+        x = self.ln_f(x)
+        return x[:, 0]
