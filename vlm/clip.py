@@ -73,5 +73,9 @@ def clip_loss(
     Returns:
         Scalar loss tensor.
     """
-    # TODO: implement.
-    raise NotImplementedError
+    logits = image_embeds @ text_embeds.T * logit_scale.exp()
+    targets = torch.arange(image_embeds.shape[0], device=image_embeds.device)
+
+    image_loss = nn.functional.cross_entropy(logits, targets)
+    text_loss = nn.functional.cross_entropy(logits.T, targets)
+    return 0.5 * (image_loss + text_loss)
