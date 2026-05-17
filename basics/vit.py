@@ -67,10 +67,7 @@ class ViT(nn.Module):
         dropout: float = 0.1,
     ) -> None:
         super().__init__()
-        # TODO: implement.
-        # Hint: store self.cls_token as nn.Parameter(torch.zeros(1, 1, d_model))
-        # and self.pos_embed as nn.Parameter(torch.zeros(1, num_patches+1, d_model)).
-        # Use basics.model.Block(..., is_decoder=False) for the encoder blocks.
+        self.d_model = d_model
         self.patch_embedding = PatchEmbeddings(patch_size=patch_size, img_size=img_size, d_model=d_model)
         num_tokens = self.patch_embedding.num_patches + 1
         self.cls_token = nn.Parameter(torch.zeros(1, 1, d_model))
@@ -89,7 +86,7 @@ class ViT(nn.Module):
         )
         self.ln_f = nn.LayerNorm(d_model)
 
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
+    def forward(self, x: torch.Tensor, return_all_tokens: bool = False) -> torch.Tensor:
         B = x.shape[0]
         x = self.patch_embedding(x)
         cls_tokens = self.cls_token.expand(B, -1, -1)
@@ -97,4 +94,6 @@ class ViT(nn.Module):
         x = x + self.pos_embed
         x = self.blocks(x)
         x = self.ln_f(x)
+        if return_all_tokens:
+            return x
         return x[:, 0]
