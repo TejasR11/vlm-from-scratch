@@ -100,7 +100,10 @@ def clean_prediction(text: str) -> str:
     text = text.strip()
     if "Answer:" in text:
         text = text.split("Answer:")[-1].strip()
-    return text.splitlines()[0].strip().strip(".")
+    lines = text.splitlines()
+    if not lines:
+        return ""
+    return lines[0].strip().strip(".")
 
 
 @torch.no_grad()
