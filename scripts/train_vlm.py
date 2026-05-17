@@ -12,6 +12,7 @@ import argparse
 import itertools
 import json
 import math
+import re
 import time
 from contextlib import nullcontext
 from pathlib import Path
@@ -19,6 +20,7 @@ from pathlib import Path
 import torch
 import yaml
 from basics import vit
+from basics.lora import LoRALinear
 from transformers import AutoModelForCausalLM, AutoTokenizer
 from vlm import data
 from vlm.eval import batch_clevr_accuracy
@@ -97,13 +99,69 @@ def tokenize_vqa_batch(
 
 
 def clean_prediction(text: str) -> str:
-    text = text.strip()
-    if "Answer:" in text:
-        text = text.split("Answer:")[-1].strip()
+    text = text.strip().lower()
+    if "answer:" in text:
+        text = text.split("answer:")[-1].strip()
     lines = text.splitlines()
     if not lines:
         return ""
-    return lines[0].strip().strip(".")
+    text = lines[0].strip().strip(".")
+    answer_vocab = [
+        "yes", "no",
+        "gray", "red", "blue", "green", "brown", "purple", "cyan", "yellow",
+        "cube", "sphere", "cylinder",
+        "rubber", "metal",
+        "small", "large",
+        "0", "1", "2", "3", "4", "5", "6", "7", "8", "9", "10",
+        "zero", "one", "two", "three", "four", "five",
+        "six", "seven", "eight", "nine", "ten",
+    ]
+    tokens = re.findall(r"[a-z]+|\d+", text)
+    for token in tokens:
+        if token in answer_vocab:
+            return token
+    return text
+
+
+def apply_lora_to_decoder_qv(decoder: torch.nn.Module, rank: int = 8, alpha: float = 16.0) -> None:
+    for module in decoder.modules():
+        if hasattr(module, "q_proj") and isinstance(module.q_proj, torch.nn.Linear):
+            module.q_proj = LoRALinear(module.q_proj, rank, alpha)
+        if hasattr(module, "v_proj") and isinstance(module.v_proj, torch.nn.Linear):
+            module.v_proj = LoRALinear(module.v_proj, rank, alpha)
+
+
+def configure_trainable_parameters(model: VisionLanguageModel, freeze_config: str) -> list[torch.nn.Parameter]:
+    for param in model.parameters():
+        param.requires_grad_(False)
+
+    for param in model.projector.parameters():
+        param.requires_grad_(True)
+
+    if freeze_config == "A":
+        pass
+    elif freeze_config == "B":
+        apply_lora_to_decoder_qv(model.decoder, rank=8, alpha=16.0)
+    elif freeze_config == "C":
+        for param in model.decoder.parameters():
+            param.requires_grad_(True)
+    elif freeze_config == "D":
+        for param in model.vit.parameters():
+            param.requires_grad_(True)
+        for param in model.decoder.parameters():
+            param.requires_grad_(True)
+    else:
+        raise ValueError(f"Unknown freeze_config: {freeze_config}")
+
+    return [param for param in model.parameters() if param.requires_grad]
+
+
+def set_training_modes(model: VisionLanguageModel, freeze_config: str) -> None:
+    model.projector.train()
+    model.vit.train(freeze_config == "D")
+    model.decoder.train(freeze_config in ("C", "D"))
+    if freeze_config in ("A", "B"):
+        model.decoder.eval()
 
 
 @torch.no_grad()
@@ -154,9 +212,6 @@ def main() -> None:
         )
     args.output_dir.mkdir(parents=True, exist_ok=True)
 
-    if args.freeze_config != "A":
-        raise NotImplementedError("This trainer currently implements freeze config A.")
-
     device = torch.device(args.device)
     if device.type == "cuda":
         torch.backends.cuda.matmul.allow_tf32 = True
@@ -206,6 +261,8 @@ def main() -> None:
     if added_tokens > 0:
         decoder.resize_token_embeddings(len(tokenizer))
     decoder.config.use_cache = False
+    if args.freeze_config in ("C", "D") and hasattr(decoder, "gradient_checkpointing_enable"):
+        decoder.gradient_checkpointing_enable()
 
     d_decoder = decoder.get_input_embeddings().embedding_dim
     projector = VisionLanguageProjector(
@@ -221,16 +278,11 @@ def main() -> None:
         image_token_id=image_token_id,
     ).to(device)
 
-    for param in model.vit.parameters():
-        param.requires_grad_(False)
-    for param in model.decoder.parameters():
-        param.requires_grad_(False)
-    for param in model.projector.parameters():
-        param.requires_grad_(True)
+    trainable_parameters = configure_trainable_parameters(model, args.freeze_config)
 
-    trainable_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
+    trainable_params = sum(p.numel() for p in trainable_parameters)
     optimizer = torch.optim.AdamW(
-        [p for p in model.parameters() if p.requires_grad],
+        trainable_parameters,
         lr=cfg["optim"]["lr"],
         betas=tuple(cfg["optim"]["betas"]),
         weight_decay=cfg["optim"]["weight_decay"],
@@ -269,13 +321,12 @@ def main() -> None:
     best_acc = -1.0
     total_loss = 0.0
     optimizer.zero_grad(set_to_none=True)
-    model.vit.eval()
-    model.decoder.eval()
+    set_training_modes(model, args.freeze_config)
     start_time = time.perf_counter()
     train_iter = itertools.cycle(train_loader)
 
     for step in range(1, num_steps + 1):
-        model.projector.train()
+        set_training_modes(model, args.freeze_config)
         step_loss = 0.0
         for _ in range(grad_accum):
             batch = next(train_iter)
@@ -300,7 +351,7 @@ def main() -> None:
             loss.backward()
             step_loss += loss.item()
 
-        grad_norm = torch.nn.utils.clip_grad_norm_(model.projector.parameters(), 1.0)
+        grad_norm = torch.nn.utils.clip_grad_norm_(trainable_parameters, 1.0)
         optimizer.step()
         scheduler.step()
         optimizer.zero_grad(set_to_none=True)
@@ -338,10 +389,17 @@ def main() -> None:
                 torch.save(
                     {
                         "config": cfg,
+                        "vit_config": vit_cfg,
+                        "decoder_model_name": cfg["decoder"]["model_name"],
                         "injection": args.injection,
                         "mask_mode": args.mask_mode,
                         "freeze_config": args.freeze_config,
                         "pretrained_vit": str(args.pretrained_vit),
+                        "trainable_state": {
+                            name: param.detach().cpu()
+                            for name, param in model.named_parameters()
+                            if param.requires_grad
+                        },
                         "projector": model.projector.state_dict(),
                         "image_token_id": image_token_id,
                         "step": step,
